@@ -589,6 +589,13 @@ impl State {
                 self.backend.toggle_debug_tint();
                 self.niri.queue_redraw_all();
             }
+            #[cfg(feature = "xdp-gnome-input-capture")]
+            Action::TestInputCaptureActivation => {
+                use crate::dbus::mutter_input_capture::trigger_activation_test;
+                if let Err(err) = trigger_activation_test() {
+                    warn!("Error triggering activation test: {err:?}");
+                }
+            }
             Action::DebugToggleOpaqueRegions => {
                 self.niri.debug_draw_opaque_regions = !self.niri.debug_draw_opaque_regions;
                 self.niri.queue_redraw_all();
@@ -2315,6 +2322,13 @@ impl State {
 
         self.niri.pointer_contents.clone_from(&under);
 
+        // Check for input capture barrier crossing
+        #[cfg(feature = "xdp-gnome-input-capture")]
+        {
+            use crate::dbus::mutter_input_capture::check_barrier_crossing;
+            check_barrier_crossing((pos.x, pos.y), (new_pos.x, new_pos.y));
+        }
+
         pointer.motion(
             self,
             under.surface.clone(),
@@ -2406,6 +2420,14 @@ impl State {
         self.niri.handle_focus_follows_mouse(&under);
 
         self.niri.pointer_contents.clone_from(&under);
+
+        // Check for input capture barrier crossing
+        #[cfg(feature = "xdp-gnome-input-capture")]
+        {
+            let old_pos = pointer.current_location();
+            use crate::dbus::mutter_input_capture::check_barrier_crossing;
+            check_barrier_crossing((old_pos.x, old_pos.y), (pos.x, pos.y));
+        }
 
         pointer.motion(
             self,

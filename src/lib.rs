@@ -34,5 +34,8 @@ pub use dummy_pw_utils as pw_utils;
 #[cfg(feature = "xdp-gnome-remote-desktop")]
 pub mod remote_desktop;
 
+#[cfg(feature = "xdp-gnome-input-capture")]
+pub mod input_capture;
+
 #[cfg(test)]
 mod tests;

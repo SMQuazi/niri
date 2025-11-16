@@ -34,6 +34,12 @@ pub fn handle_msg(msg: Msg, json: bool) -> anyhow::Result<()> {
         Msg::EventStream => Request::EventStream,
         Msg::RequestError => Request::ReturnError,
         Msg::OverviewState => Request::OverviewState,
+        #[cfg(feature = "xdp-gnome-input-capture")]
+        Msg::TestInputCaptureActivation { barrier_id } => {
+            Request::TestInputCaptureActivation {
+                barrier_id: *barrier_id,
+            }
+        }
     };
 
     let mut socket = Socket::connect().context("error connecting to the niri socket")?;
@@ -488,6 +494,14 @@ pub fn handle_msg(msg: Msg, json: bool) -> anyhow::Result<()> {
             } else {
                 println!("Overview is closed.");
             }
+        }
+        #[cfg(feature = "xdp-gnome-input-capture")]
+        Msg::TestInputCaptureActivation { barrier_id } => {
+            let Response::Handled = response else {
+                bail!("unexpected response: expected Handled, got {response:?}");
+            };
+
+            println!("Triggered input capture activation for barrier {}", barrier_id);
         }
     }
 

@@ -153,6 +153,8 @@ use crate::pw_utils::{Cast, PipeWire};
 use crate::pw_utils::{CastSizeChange, PwToNiri};
 #[cfg(feature = "xdp-gnome-remote-desktop")]
 use crate::remote_desktop::RemoteDesktopState;
+#[cfg(feature = "xdp-gnome-input-capture")]
+use crate::input_capture::InputCaptureState;
 use crate::render_helpers::debug::draw_opaque_regions;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
@@ -420,6 +422,9 @@ pub struct Niri {
 
     #[cfg(feature = "xdp-gnome-remote-desktop")]
     pub remote_desktop: RemoteDesktopState,
+
+    #[cfg(feature = "xdp-gnome-input-capture")]
+    pub input_capture: InputCaptureState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2729,6 +2734,8 @@ impl Niri {
             dynamic_cast_id_for_portal: MappedId::next(),
             #[cfg(feature = "xdp-gnome-remote-desktop")]
             remote_desktop: RemoteDesktopState::default(),
+            #[cfg(feature = "xdp-gnome-input-capture")]
+            input_capture: InputCaptureState::default(),
         };
 
         niri.reset_pointer_inactivity_timer();

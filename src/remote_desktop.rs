@@ -283,7 +283,7 @@ impl State {
     /// Creates an EI keyboard if the capabilities match.
     ///
     /// The device must be [`EiDevice::resumed`] for clients to start emulating input.
-    fn create_ei_keyboard(
+    pub fn create_ei_keyboard(
         seat: &EiSeat,
         capabilities: BitFlags<DeviceCapability>,
         connection: &mut reis::request::Connection,
@@ -331,7 +331,7 @@ impl State {
     /// Creates an EI mouse if the capabilities match.
     ///
     /// The device must be [`EiDevice::resumed`] for clients to start emulating input.
-    fn create_ei_mouse(
+    pub fn create_ei_mouse(
         seat: &EiSeat,
         capabilities: BitFlags<DeviceCapability>,
         connection: &mut reis::request::Connection,
@@ -365,7 +365,7 @@ impl State {
     /// Creates an EI keyboard if the capabilities match.
     ///
     /// The device must be [`EiDevice::resumed`] for clients to start emulating input.
-    fn create_ei_touchscreen(
+    pub fn create_ei_touchscreen(
         seat: &EiSeat,
         capabilities: BitFlags<DeviceCapability>,
         connection: &mut reis::request::Connection,

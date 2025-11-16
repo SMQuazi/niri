@@ -99,6 +99,13 @@ pub enum Msg {
         #[command(subcommand)]
         action: OutputAction,
     },
+    /// Trigger input capture activation for testing (manually activates barrier).
+    #[cfg(feature = "xdp-gnome-input-capture")]
+    TestInputCaptureActivation {
+        /// Barrier ID to activate (use 1 for first barrier).
+        #[arg(default_value = "1")]
+        barrier_id: u32,
+    },
     /// Start continuously receiving events from the compositor.
     EventStream,
     /// Print the version of the running niri instance.

@@ -446,6 +446,13 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let is_open = state.overview.is_open;
             Response::OverviewState(Overview { is_open })
         }
+        #[cfg(feature = "xdp-gnome-input-capture")]
+        Request::TestInputCaptureActivation { barrier_id: _ } => {
+            // TODO: Implement manual activation trigger for testing
+            // This would require access to the DBus session which isn't available in IPC context
+            // For now, barrier crossing detection needs to be implemented in the input handling code
+            return Err(String::from("manual activation not yet implemented"));
+        }
     };
 
     Ok(response)

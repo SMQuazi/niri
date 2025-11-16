@@ -137,9 +137,9 @@ systemd = ["dbus"]
 # Enables screencasting support through xdg-desktop-portal-gnome.
 xdp-gnome-screencast = ["dbus", "pipewire"]
 # Enables Remote Desktop portal support through xdg-desktop-portal-gnome.
-xdp-gnome-remote-desktop = ["dbus", "reis"]
+xdp-gnome-remote-desktop = ["dbus", "reis", "xdp-gnome-screencast"]
 # Enables Input Capture portal support through xdg-desktop-portal-gnome.
-xdp-gnome-input-capture = ["dbus", "reis"]
+xdp-gnome-input-capture = ["dbus", "reis", "xdp-gnome-remote-desktop", "niri-ipc/xdp-gnome-input-capture", "niri-config/xdp-gnome-input-capture"]
 # Enables the Tracy profiler instrumentation.
 profile-with-tracy = ["profiling/profile-with-tracy", "tracy-client/default"]
 # Enables the on-demand Tracy profiler instrumentation.

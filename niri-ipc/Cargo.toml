@@ -20,3 +20,4 @@ serde_json.workspace = true
 [features]
 clap = ["dep:clap"]
 json-schema = ["dep:schemars"]
+xdp-gnome-input-capture = []

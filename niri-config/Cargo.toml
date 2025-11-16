@@ -18,6 +18,9 @@ smithay = { workspace = true, features = ["backend_libinput"] }
 tracing.workspace = true
 tracy-client.workspace = true
 
+[features]
+xdp-gnome-input-capture = []
+
 [dev-dependencies]
 insta.workspace = true
 pretty_assertions = "1.4.1"

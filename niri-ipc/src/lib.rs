@@ -116,6 +116,12 @@ pub enum Request {
     ReturnError,
     /// Request information about the overview.
     OverviewState,
+    /// Trigger input capture activation for testing.
+    #[cfg(feature = "xdp-gnome-input-capture")]
+    TestInputCaptureActivation {
+        /// Barrier ID to activate.
+        barrier_id: u32,
+    },
 }
 
 /// Reply from niri to client.
@@ -759,6 +765,9 @@ pub enum Action {
     },
     /// Toggle a debug tint on windows.
     ToggleDebugTint {},
+    /// Test input capture activation.
+    #[cfg(feature = "xdp-gnome-input-capture")]
+    TestInputCaptureActivation {},
     /// Toggle visualization of render element opaque regions.
     DebugToggleOpaqueRegions {},
     /// Toggle visualization of output damage.
