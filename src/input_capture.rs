@@ -39,6 +39,7 @@ pub struct ActiveSession {
     pub session_id: usize,
     pub barriers: Arc<std::sync::Mutex<HashMap<u32, Barrier>>>,
     pub signal_emitter: Arc<std::sync::Mutex<Option<SignalEmitter<'static>>>>,
+    pub enabled: bool,  // True when EIS context is active
     pub activated: bool,
     pub current_activation_id: u32,
     pub current_barrier_id: Option<u32>,
@@ -67,8 +68,8 @@ impl State {
         }
         
         for (session_id, session) in &self.niri.input_capture.sessions {
-            // Only check inactive sessions (once activated, we don't need to check barriers)
-            if session.activated {
+            // Only check enabled and inactive sessions
+            if !session.enabled || session.activated {
                 continue;
             }
             
@@ -120,6 +121,12 @@ impl State {
                 warn!("InputCapture: received NewEisContext for session {} (screen {}x{})", 
                       session_id, screen_width, screen_height);
                 
+                // Mark session as enabled now that EIS context is active
+                if let Some(session) = self.niri.input_capture.sessions.get_mut(&session_id) {
+                    session.enabled = true;
+                    warn!("InputCapture: Session {} marked as enabled", session_id);
+                }
+                
                 // WORKAROUND: Handle EIS connection in a separate thread instead of using calloop.
                 // The reis library's EisRequestSource causes calloop to freeze on disconnect.
                 // By handling the connection in a thread, we avoid the calloop integration entirely.
@@ -144,6 +151,7 @@ impl State {
                     session_id,
                     barriers,
                     signal_emitter: Arc::new(std::sync::Mutex::new(None)),
+                    enabled: false,  // Will be set to true when EIS context is created
                     activated: false,
                     current_activation_id: 0,
                     current_barrier_id: None,

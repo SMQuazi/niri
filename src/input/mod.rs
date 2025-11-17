@@ -2183,6 +2183,7 @@ impl State {
         let mut new_pos = pos + event.delta();
 
         // Check for barrier crossings in Input Capture sessions
+        warn!("on_pointer_motion: pos={:?}, new_pos={:?}, sessions={}", pos, new_pos, self.niri.input_capture.sessions.len());
         if let Some((session_id, barrier_id, cursor_pos)) = self.check_barrier_crossing(pos, new_pos) {
             warn!("Barrier crossing detected! Session {} barrier {} at {:?}", 
                   session_id, barrier_id, cursor_pos);
@@ -2192,10 +2193,12 @@ impl State {
                 session.activated = true;
                 session.current_barrier_id = Some(barrier_id);
                 session.current_activation_id += 1;
+                let activation_id = session.current_activation_id;
                 self.niri.input_capture.input_suppressed = true;
                 
-                warn!("Session {} activated, input suppressed", session_id);
-                // TODO: Send DBus signal for activation
+                warn!("Session {} activated (activation_id {}), input suppressed", session_id, activation_id);
+                // TODO: Send DBus activated signal to remote client
+                // For now, the remote will know they're activated when they start receiving EIS events
             }
             
             // Don't process this motion event further - cursor stays at barrier
