@@ -37,6 +37,21 @@ pub(super) mod shared {
     }
 }
 
+pub enum CalloopToInputCaptureDBus {
+    EmitActivated {
+        session_id: usize,
+        barrier_id: u32,
+        activation_id: u32,
+        cursor_position: (f64, f64),
+    },
+    EmitDeactivated {
+        session_id: usize,
+        barrier_id: u32,
+        activation_id: u32,
+        cursor_position: (f64, f64),
+    },
+}
+
 pub enum InputCaptureDBusToCalloop {
     RemoveEisHandler {
         session_id: usize,
@@ -56,6 +71,7 @@ pub enum InputCaptureDBusToCalloop {
     RegisterSession {
         session_id: usize,
         barriers: Arc<std::sync::Mutex<HashMap<u32, crate::input_capture::Barrier>>>,
+        signal_sender: calloop::channel::Sender<CalloopToInputCaptureDBus>,
     },
     UnregisterSession {
         session_id: usize,
@@ -76,6 +92,7 @@ pub enum InputCaptureDBusToCalloop {
 /// D-Bus object for the input capture portal's implementation
 pub(super) struct InputCapture {
     pub(super) to_calloop: calloop::channel::Sender<InputCaptureDBusToCalloop>,
+    pub(super) from_calloop_tx: calloop::channel::Sender<CalloopToInputCaptureDBus>,
     pub(super) shared: Arc<futures_util::lock::Mutex<shared::InputCaptureShared>>,
     pub(super) ipc_outputs: Arc<std::sync::Mutex<IpcOutputMap>>,
 }
@@ -95,6 +112,94 @@ impl Start for InputCapture {
         info!("InputCapture DBus interface started successfully");
         Ok(conn)
     }
+}
+
+/// Start InputCapture with a signal emission handler thread
+pub(super) fn start_with_signal_handler(
+    input_capture: InputCapture,
+    from_calloop_rx: calloop::channel::Channel<CalloopToInputCaptureDBus>,
+) -> Option<zbus::blocking::Connection> {
+    use tracing::warn;
+    
+    // Clone the shared data before starting (which consumes input_capture)
+    let shared = input_capture.shared.clone();
+    
+    let conn = match input_capture.start() {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to start InputCapture: {}", e);
+            return None;
+        }
+    };
+    
+    // Spawn thread to handle signal emission requests from calloop
+    std::thread::Builder::new()
+        .name("input-capture-signals".to_string())
+        .spawn(move || {
+            use async_io::block_on;
+            
+            loop {
+                match from_calloop_rx.recv() {
+                    Ok(msg) => {
+                        match msg {
+                            CalloopToInputCaptureDBus::EmitActivated {
+                                session_id,
+                                barrier_id,
+                                activation_id,
+                                cursor_position,
+                            } => {
+                                warn!("Signal thread: Emitting Activated signal for session {} barrier {} activation {}", 
+                                      session_id, barrier_id, activation_id);
+                                      
+                                block_on(async {
+                                    let shared_lock = shared.lock().await;
+                                    if let Some(session_ref) = shared_lock.sessions.get(&session_id) {
+                                        let signal_emitter = session_ref.signal_emitter();
+                                        if let Err(e) = Session::activated(&signal_emitter, barrier_id, activation_id, cursor_position).await {
+                                            warn!("Failed to emit Activated signal: {}", e);
+                                        } else {
+                                            warn!("Activated signal emitted successfully");
+                                        }
+                                    } else {
+                                        warn!("Session {} not found for signal emission", session_id);
+                                    }
+                                });
+                            }
+                            CalloopToInputCaptureDBus::EmitDeactivated {
+                                session_id,
+                                barrier_id,
+                                activation_id,
+                                cursor_position,
+                            } => {
+                                warn!("Signal thread: Emitting Deactivated signal for session {} barrier {} activation {}", 
+                                      session_id, barrier_id, activation_id);
+                                      
+                                block_on(async {
+                                    let shared_lock = shared.lock().await;
+                                    if let Some(session_ref) = shared_lock.sessions.get(&session_id) {
+                                        let signal_emitter = session_ref.signal_emitter();
+                                        if let Err(e) = Session::deactivated(&signal_emitter, barrier_id, activation_id, cursor_position).await {
+                                            warn!("Failed to emit Deactivated signal: {}", e);
+                                        } else {
+                                            warn!("Deactivated signal emitted successfully");
+                                        }
+                                    } else {
+                                        warn!("Session {} not found for signal emission", session_id);
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        warn!("Signal emission channel closed, exiting thread");
+                        break;
+                    }
+                }
+            }
+        })
+        .expect("Failed to spawn signal emission thread");
+    
+    Some(conn)
 }
 
 #[interface(
@@ -125,6 +230,7 @@ impl InputCapture {
             id: session_id,
             id_str: session_id.to_string(),
             to_calloop: self.to_calloop.clone(),
+            signal_sender: self.from_calloop_tx.clone(),
             ipc_outputs: self.ipc_outputs.clone(),
             active: true,  // Session is active immediately upon creation
             enabled: false,
@@ -188,6 +294,7 @@ pub(super) struct Session {
     id: usize,
     id_str: String,
     to_calloop: calloop::channel::Sender<InputCaptureDBusToCalloop>,
+    signal_sender: calloop::channel::Sender<CalloopToInputCaptureDBus>,
     ipc_outputs: Arc<std::sync::Mutex<IpcOutputMap>>,
     pub active: bool,
     pub enabled: bool,
@@ -374,6 +481,7 @@ impl Session {
         if let Err(err) = self.to_calloop.send(InputCaptureDBusToCalloop::RegisterSession {
             session_id: self.id,
             barriers: self.barriers.clone(),
+            signal_sender: self.signal_sender.clone(),
         }) {
             warn!("Failed to register session with niri: {}", err);
         }

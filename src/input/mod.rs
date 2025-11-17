@@ -2188,17 +2188,29 @@ impl State {
             warn!("Barrier crossing detected! Session {} barrier {} at {:?}", 
                   session_id, barrier_id, cursor_pos);
             
-            // Mark session as activated and suppress input
+            // Mark session as activated but DON'T suppress input yet
+            // Input-Leap will send DeviceStartEmulating when it's ready to take control
             if let Some(session) = self.niri.input_capture.sessions.get_mut(&session_id) {
                 session.activated = true;
                 session.current_barrier_id = Some(barrier_id);
                 session.current_activation_id += 1;
                 let activation_id = session.current_activation_id;
-                self.niri.input_capture.input_suppressed = true;
                 
-                warn!("Session {} activated (activation_id {}), input suppressed", session_id, activation_id);
-                // TODO: Send DBus activated signal to remote client
-                // For now, the remote will know they're activated when they start receiving EIS events
+                warn!("Session {} activated (activation_id {}), waiting for DeviceStartEmulating", session_id, activation_id);
+                
+                // Send DBus activated signal to Input-Leap
+                if let Some(signal_sender) = &session.signal_sender {
+                    use crate::dbus::mutter_input_capture::CalloopToInputCaptureDBus;
+                    let _ = signal_sender.send(CalloopToInputCaptureDBus::EmitActivated {
+                        session_id,
+                        barrier_id,
+                        activation_id,
+                        cursor_position: (cursor_pos.x, cursor_pos.y),
+                    });
+                    warn!("Sent Activated signal emission request");
+                } else {
+                    warn!("No signal sender available for session {}", session_id);
+                }
             }
             
             // Don't process this motion event further - cursor stays at barrier
@@ -2207,6 +2219,7 @@ impl State {
 
         // If input is suppressed (remote is in control), don't process local pointer
         if self.niri.input_capture.input_suppressed {
+            warn!("Input suppressed, dropping pointer motion event");
             return;
         }
 

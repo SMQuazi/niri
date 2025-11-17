@@ -172,12 +172,17 @@ impl DBusServers {
                     })
                     .unwrap();
                 info!("Initializing InputCapture DBus interface");
+                
+                // Create channel for signal emission requests from calloop back to DBus
+                let (from_calloop_tx, from_calloop_rx) = calloop::channel::channel::<mutter_input_capture::CalloopToInputCaptureDBus>();
+                
                 let input_capture = mutter_input_capture::InputCapture {
                     to_calloop: to_niri,
+                    from_calloop_tx,
                     shared: mutter_input_capture::shared::InputCaptureShared::new_arc_mutex(),
                     ipc_outputs: backend.ipc_outputs(),
                 };
-                dbus.conn_input_capture = try_start(input_capture);
+                dbus.conn_input_capture = mutter_input_capture::start_with_signal_handler(input_capture, from_calloop_rx);
                 if dbus.conn_input_capture.is_some() {
                     info!("InputCapture DBus interface initialized successfully");
                 } else {

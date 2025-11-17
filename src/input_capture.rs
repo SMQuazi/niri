@@ -1,4 +1,4 @@
-//! Module containing the parts of the implementation of input capture that need global state.
+//      ! Module containing the parts of the implementation of input capture that need global state.
 
 use std::thread;
 
@@ -39,6 +39,7 @@ pub struct ActiveSession {
     pub session_id: usize,
     pub barriers: Arc<std::sync::Mutex<HashMap<u32, Barrier>>>,
     pub signal_emitter: Arc<std::sync::Mutex<Option<SignalEmitter<'static>>>>,
+    pub signal_sender: Option<calloop::channel::Sender<crate::dbus::mutter_input_capture::CalloopToInputCaptureDBus>>,
     pub enabled: bool,  // True when EIS context is active
     pub activated: bool,
     pub current_activation_id: u32,
@@ -63,13 +64,24 @@ impl State {
         new_pos: Point<f64, Logical>,
     ) -> Option<(usize, u32, Point<f64, Logical>)> {
         // Only check if we have sessions and input is not already suppressed
-        if self.niri.input_capture.sessions.is_empty() || self.niri.input_capture.input_suppressed {
+        if self.niri.input_capture.sessions.is_empty() {
+            return None;
+        }
+        if self.niri.input_capture.input_suppressed {
+            warn!("check_barrier_crossing: input already suppressed, skipping");
             return None;
         }
         
+        let delta: Point<f64, Logical> = Point::from((new_pos.x - old_pos.x, new_pos.y - old_pos.y));
+        
         for (session_id, session) in &self.niri.input_capture.sessions {
             // Only check enabled and inactive sessions
-            if !session.enabled || session.activated {
+            if !session.enabled {
+                warn!("Skipping session {} - not enabled", session_id);
+                continue;
+            }
+            if session.activated {
+                warn!("Skipping session {} - already activated", session_id);
                 continue;
             }
             
@@ -82,17 +94,49 @@ impl State {
             };
             
             if barriers.is_empty() {
+                warn!("Session {} has no barriers", session_id);
                 continue;
             }
             
+            warn!("Checking {} barriers for session {}", barriers.len(), session_id);
+            
             for (barrier_id, barrier) in barriers.iter() {
-                // Check if the line from old_pos to new_pos crosses the barrier line
-                if line_segments_intersect(
-                    old_pos.x, old_pos.y, new_pos.x, new_pos.y,
-                    barrier.x1 as f64, barrier.y1 as f64,
-                    barrier.x2 as f64, barrier.y2 as f64,
-                ) {
-                    warn!("Barrier crossing: session {} barrier {} from {:?} to {:?}", 
+                // Barriers are often placed 1 pixel outside the valid coordinate space
+                // (e.g., x=6400 when max is 6399). Check if we're at the edge and trying 
+                // to move further in that direction.
+                const EDGE_THRESHOLD: f64 = 1.5;
+                
+                // Debug: log ALL barriers being checked
+                warn!("Checking barrier {}: ({},{}) -> ({},{}), pos={:?}, delta={:?}", 
+                      barrier_id, barrier.x1, barrier.y1, barrier.x2, barrier.y2, new_pos, delta);
+                
+                let at_or_near_barrier = if barrier.x1 == barrier.x2 {
+                    // Vertical barrier
+                    let barrier_x = barrier.x1 as f64;
+                    (new_pos.x - barrier_x).abs() < EDGE_THRESHOLD &&
+                    new_pos.y >= barrier.y1.min(barrier.y2) as f64 &&
+                    new_pos.y <= barrier.y1.max(barrier.y2) as f64 &&
+                    ((delta.x > 0.0 && new_pos.x >= barrier_x - EDGE_THRESHOLD) ||
+                     (delta.x < 0.0 && new_pos.x <= barrier_x + EDGE_THRESHOLD))
+                } else if barrier.y1 == barrier.y2 {
+                    // Horizontal barrier
+                    let barrier_y = barrier.y1 as f64;
+                    (new_pos.y - barrier_y).abs() < EDGE_THRESHOLD &&
+                    new_pos.x >= barrier.x1.min(barrier.x2) as f64 &&
+                    new_pos.x <= barrier.x1.max(barrier.x2) as f64 &&
+                    ((delta.y > 0.0 && new_pos.y >= barrier_y - EDGE_THRESHOLD) ||
+                     (delta.y < 0.0 && new_pos.y <= barrier_y + EDGE_THRESHOLD))
+                } else {
+                    // Diagonal barrier - use line intersection
+                    line_segments_intersect(
+                        old_pos.x, old_pos.y, new_pos.x, new_pos.y,
+                        barrier.x1 as f64, barrier.y1 as f64,
+                        barrier.x2 as f64, barrier.y2 as f64,
+                    )
+                };
+                
+                if at_or_near_barrier {
+                    warn!("Barrier crossing detected: session {} barrier {} from {:?} to {:?}", 
                           session_id, barrier_id, old_pos, new_pos);
                     warn!("Barrier line: ({},{}) -> ({},{})", barrier.x1, barrier.y1, barrier.x2, barrier.y2);
                     return Some((*session_id, *barrier_id, new_pos));
@@ -130,6 +174,7 @@ impl State {
                 // WORKAROUND: Handle EIS connection in a separate thread instead of using calloop.
                 // The reis library's EisRequestSource causes calloop to freeze on disconnect.
                 // By handling the connection in a thread, we avoid the calloop integration entirely.
+                let event_sender_clone = event_sender.clone();
                 thread::Builder::new()
                     .name(format!("eis-session-{}", session_id))
                     .spawn(move || {
@@ -139,19 +184,22 @@ impl State {
                             warn!("EIS session {} error: {}", session_id, e);
                         }
                         
-                        warn!("EIS session {} thread exiting", session_id);
+                        warn!("EIS session {} thread exiting - sending UnregisterSession", session_id);
+                        // Clean up the session when the thread exits
+                        let _ = event_sender_clone.send(InputCaptureDBusToCalloop::UnregisterSession { session_id });
                     })
                     .expect("Failed to spawn EIS session thread");
                 
                 warn!("InputCapture: NewEisContext complete (thread-based handler)")
             }
-            InputCaptureDBusToCalloop::RegisterSession { session_id, barriers } => {
+            InputCaptureDBusToCalloop::RegisterSession { session_id, barriers, signal_sender } => {
                 warn!("InputCapture: Registering session {} for barrier detection", session_id);
                 self.niri.input_capture.sessions.insert(session_id, ActiveSession {
                     session_id,
                     barriers,
                     signal_emitter: Arc::new(std::sync::Mutex::new(None)),
-                    enabled: false,  // Will be set to true when EIS context is created
+                    signal_sender: Some(signal_sender),
+                    enabled: true,  // Session is registered when client is ready
                     activated: false,
                     current_activation_id: 0,
                     current_barrier_id: None,
@@ -262,7 +310,9 @@ impl State {
                         // Frame events group other events together
                     }
                     EisRequest::DeviceStartEmulating(_) => {
-                        warn!("EIS session {}: Device start emulating", session_id);
+                        warn!("EIS session {}: Device start emulating - suppressing local input", session_id);
+                        // Now that Input-Leap is ready to send input, suppress local input
+                        self.niri.input_capture.input_suppressed = true;
                     }
                     EisRequest::DeviceStopEmulating(_) => {
                         warn!("EIS session {}: Device stop emulating - deactivating session", session_id);
@@ -364,6 +414,7 @@ fn handle_eis_connection(
                     }
                     
                     while let Some(eis_request) = request_converter.next_request() {
+                        warn!("EIS session {}: Received request: {:?}", session_id, eis_request);
                         match &eis_request {
                             EisRequest::Bind(bind_req) => {
                                 warn!("EIS session {}: Client bound to capabilities: {:?}", session_id, bind_req.capabilities);
