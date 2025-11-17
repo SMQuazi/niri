@@ -582,7 +582,7 @@ impl State {
             Action::PowerOffMonitors => {
                 self.niri.deactivate_monitors(&mut self.backend);
             }
-            Action::PowerOnMonitors => {
+                Action::PowerOnMonitors => {
                 self.niri.activate_monitors(&mut self.backend);
             }
             Action::ToggleDebugTint => {
@@ -2181,6 +2181,31 @@ impl State {
 
         // We have an output, so we can compute the new location and focus.
         let mut new_pos = pos + event.delta();
+
+        // Check for barrier crossings in Input Capture sessions
+        if let Some((session_id, barrier_id, cursor_pos)) = self.check_barrier_crossing(pos, new_pos) {
+            warn!("Barrier crossing detected! Session {} barrier {} at {:?}", 
+                  session_id, barrier_id, cursor_pos);
+            
+            // Mark session as activated and suppress input
+            if let Some(session) = self.niri.input_capture.sessions.get_mut(&session_id) {
+                session.activated = true;
+                session.current_barrier_id = Some(barrier_id);
+                session.current_activation_id += 1;
+                self.niri.input_capture.input_suppressed = true;
+                
+                warn!("Session {} activated, input suppressed", session_id);
+                // TODO: Send DBus signal for activation
+            }
+            
+            // Don't process this motion event further - cursor stays at barrier
+            return;
+        }
+
+        // If input is suppressed (remote is in control), don't process local pointer
+        if self.niri.input_capture.input_suppressed {
+            return;
+        }
 
         // We received an event for the regular pointer, so show it now.
         self.niri.pointer_visibility = PointerVisibility::Visible;

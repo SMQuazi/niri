@@ -45,6 +45,29 @@ pub enum InputCaptureDBusToCalloop {
         session_id: usize,
         ctx: reis::eis::Context,
         exposed_device_types: BitFlags<MutterXdpDeviceType>,
+        screen_width: u32,
+        screen_height: u32,
+        event_sender: calloop::channel::Sender<InputCaptureDBusToCalloop>,
+    },
+    EisInputEvent {
+        session_id: usize,
+        request: reis::request::EisRequest,
+    },
+    RegisterSession {
+        session_id: usize,
+        barriers: Arc<std::sync::Mutex<HashMap<u32, crate::input_capture::Barrier>>>,
+    },
+    UnregisterSession {
+        session_id: usize,
+    },
+    ActivateSession {
+        session_id: usize,
+        barrier_id: u32,
+        cursor_position: (f64, f64),
+    },
+    DeactivateSession {
+        session_id: usize,
+        cursor_position: (f64, f64),
     },
 }
 
@@ -153,12 +176,12 @@ impl InputCapture {
 
 /// D-Bus object for an input capture session
 #[derive(Debug, Clone)]
-struct Barrier {
-    id: u32,
-    x1: i32,
-    y1: i32,
-    x2: i32,
-    y2: i32,
+pub struct Barrier {
+    pub id: u32,
+    pub x1: i32,
+    pub y1: i32,
+    pub x2: i32,
+    pub y2: i32,
 }
 
 pub(super) struct Session {
@@ -347,8 +370,13 @@ impl Session {
 
         self.enabled = true;
 
-        // In a full implementation, we would start monitoring for pointer barrier crossings
-        // and emit Activated signal when appropriate
+        // Register session with niri for barrier crossing detection
+        if let Err(err) = self.to_calloop.send(InputCaptureDBusToCalloop::RegisterSession {
+            session_id: self.id,
+            barriers: self.barriers.clone(),
+        }) {
+            warn!("Failed to register session with niri: {}", err);
+        }
 
         warn!("InputCapture.Enable COMPLETE id={}", self.id);
         Ok(())
@@ -362,6 +390,13 @@ impl Session {
         }
 
         self.enabled = false;
+
+        // Unregister session from niri
+        if let Err(err) = self.to_calloop.send(InputCaptureDBusToCalloop::UnregisterSession {
+            session_id: self.id,
+        }) {
+            warn!("Failed to unregister session from niri: {}", err);
+        }
 
         warn!("InputCapture.Disable COMPLETE id={}", self.id);
         Ok(())
@@ -469,6 +504,19 @@ impl Session {
         warn!("InputCapture.ConnectToEIS: creating EIS context");
         let ctx = reis::eis::Context::new(a).map_err(zbus::Error::from)?;
 
+        // Calculate total screen dimensions from all outputs
+        let outputs = self.ipc_outputs.lock().unwrap();
+        let (screen_width, screen_height) = outputs
+            .values()
+            .filter_map(|output| output.logical)
+            .fold((0i32, 0i32), |(max_w, max_h), logical| {
+                let right = logical.x + logical.width as i32;
+                let bottom = logical.y + logical.height as i32;
+                (max_w.max(right), max_h.max(bottom))
+            });
+        
+        warn!("InputCapture.ConnectToEIS: screen dimensions {}x{}", screen_width, screen_height);
+
         warn!("InputCapture.ConnectToEIS: sending to calloop");
         if let Err(err) =
             self.to_calloop
@@ -476,6 +524,9 @@ impl Session {
                     session_id: self.id,
                     ctx,
                     exposed_device_types: BitFlags::all(), // All device types supported
+                    screen_width: screen_width as u32,
+                    screen_height: screen_height as u32,
+                    event_sender: self.to_calloop.clone(),
                 })
         {
             warn!("error sending NewEisContext to niri: {err:?}");
