@@ -2188,9 +2188,18 @@ impl State {
             warn!("Barrier crossing detected! Session {} barrier {} at {:?}", 
                   session_id, barrier_id, cursor_pos);
             
-            // Mark session as activated but DON'T suppress input yet
-            // Input-Leap will send DeviceStartEmulating when it's ready to take control
+            // Check if session is already activated - if so, don't spam more Activated signals
             if let Some(session) = self.niri.input_capture.sessions.get_mut(&session_id) {
+                warn!("Session {} activated state BEFORE check: {}", session_id, session.activated);
+                if session.activated {
+                    // Already activated, don't send another signal
+                    warn!("Session {} already activated, ignoring barrier crossing", session_id);
+                    return;
+                }
+                warn!("Session {} was NOT activated, proceeding with activation", session_id);
+                
+                // Mark session as activated but DON'T suppress input yet
+                // Input-Leap will send DeviceStartEmulating when it's ready to take control
                 session.activated = true;
                 session.current_barrier_id = Some(barrier_id);
                 session.current_activation_id += 1;
@@ -2199,15 +2208,22 @@ impl State {
                 warn!("Session {} activated (activation_id {}), waiting for DeviceStartEmulating", session_id, activation_id);
                 
                 // Send DBus activated signal to Input-Leap
+                // IMPORTANT: Clamp cursor position to valid screen bounds (0,0 to screen size)
+                // Input-Leap may reject activations with out-of-bounds coordinates
+                let screen_width = 6400.0; // TODO: Get from actual screen config
+                let screen_height = 2880.0;
+                let clamped_x = cursor_pos.x.max(0.0).min(screen_width);
+                let clamped_y = cursor_pos.y.max(0.0).min(screen_height);
+                
                 if let Some(signal_sender) = &session.signal_sender {
                     use crate::dbus::mutter_input_capture::CalloopToInputCaptureDBus;
                     let _ = signal_sender.send(CalloopToInputCaptureDBus::EmitActivated {
                         session_id,
                         barrier_id,
                         activation_id,
-                        cursor_position: (cursor_pos.x, cursor_pos.y),
+                        cursor_position: (clamped_x, clamped_y),
                     });
-                    warn!("Sent Activated signal emission request");
+                    warn!("Sent Activated signal emission request (clamped pos: {}, {})", clamped_x, clamped_y);
                 } else {
                     warn!("No signal sender available for session {}", session_id);
                 }
@@ -2215,6 +2231,16 @@ impl State {
             
             // Don't process this motion event further - cursor stays at barrier
             return;
+        } else {
+            // No barrier crossed - if any session is activated, reset it
+            // This handles the case where cursor moved away from barrier back into normal area
+            for (session_id, session) in self.niri.input_capture.sessions.iter_mut() {
+                if session.activated && !self.niri.input_capture.input_suppressed {
+                    warn!("Cursor moved away from barrier - resetting session {} activated state", session_id);
+                    session.activated = false;
+                    session.current_barrier_id = None;
+                }
+            }
         }
 
         // If input is suppressed (remote is in control), don't process local pointer

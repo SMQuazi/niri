@@ -152,13 +152,20 @@ pub(super) fn start_with_signal_handler(
                                       session_id, barrier_id, activation_id);
                                       
                                 block_on(async {
+                                    warn!("Signal thread: Acquiring shared lock...");
                                     let shared_lock = shared.lock().await;
+                                    warn!("Signal thread: Got shared lock, looking for session {}", session_id);
                                     if let Some(session_ref) = shared_lock.sessions.get(&session_id) {
+                                        warn!("Signal thread: Found session, getting signal_emitter");
                                         let signal_emitter = session_ref.signal_emitter();
-                                        if let Err(e) = Session::activated(&signal_emitter, barrier_id, activation_id, cursor_position).await {
-                                            warn!("Failed to emit Activated signal: {}", e);
-                                        } else {
-                                            warn!("Activated signal emitted successfully");
+                                        warn!("Signal thread: Got signal_emitter, emitting Activated({}, {}, {:?})", barrier_id, activation_id, cursor_position);
+                                        match Session::activated(&signal_emitter, barrier_id, activation_id, cursor_position).await {
+                                            Ok(()) => {
+                                                warn!("Signal thread: Activated signal emitted successfully!");
+                                            }
+                                            Err(e) => {
+                                                warn!("Signal thread: Failed to emit Activated signal: {} (type: {})", e, std::any::type_name_of_val(&e));
+                                            }
                                         }
                                     } else {
                                         warn!("Session {} not found for signal emission", session_id);
@@ -378,8 +385,7 @@ struct PointerBarrier {
 
 #[interface(
     name = "org.gnome.Mutter.InputCapture.Session",
-    spawn = false,
-    introspection_docs = false
+    spawn = false
 )]
 impl Session {
     #[zbus(property)]
@@ -388,13 +394,15 @@ impl Session {
     }
 
     async fn start(&mut self) -> fdo::Result<()> {
-        debug!("InputCapture.Start id={}", self.id);
+        warn!("InputCapture.Start START id={}", self.id);
 
         if self.active {
+            warn!("InputCapture.Start FAILED - already started id={}", self.id);
             return Err(fdo::Error::Failed("Already started".to_owned()));
         }
         self.active = true;
 
+        warn!("InputCapture.Start COMPLETE id={}", self.id);
         Ok(())
     }
 
@@ -420,12 +428,24 @@ impl Session {
     #[zbus(signal)]
     async fn closed(ctxt: &SignalEmitter<'_>) -> zbus::Result<()>;
 
-    async fn get_zones(&self) -> fdo::Result<(u32, Vec<Zone>)> {
+    async fn get_zones(
+        &self,
+        #[zbus(signal_context)] ctxt: SignalEmitter<'_>,
+    ) -> fdo::Result<(u32, Vec<Zone>)> {
         warn!("InputCapture.GetZones START id={}", self.id);
 
         // GetZones can be called before Start() to query available zones
         let result = self.get_zones_impl();
         warn!("InputCapture.GetZones COMPLETE id={} zones={}", self.id, result.1.len());
+        
+        // Emit ZonesChanged signal to notify client that zones are available
+        let zone_set = result.0;
+        if let Err(e) = Session::zones_changed(&ctxt, zone_set).await {
+            warn!("Failed to emit ZonesChanged signal: {}", e);
+        } else {
+            warn!("Emitted ZonesChanged signal with zone_set={}", zone_set);
+        }
+        
         Ok(result)
     }
 

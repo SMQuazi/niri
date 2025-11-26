@@ -75,13 +75,15 @@ impl State {
         let delta: Point<f64, Logical> = Point::from((new_pos.x - old_pos.x, new_pos.y - old_pos.y));
         
         for (session_id, session) in &self.niri.input_capture.sessions {
-            // Only check enabled and inactive sessions
+            // Only check enabled sessions
             if !session.enabled {
                 warn!("Skipping session {} - not enabled", session_id);
                 continue;
             }
-            if session.activated {
-                warn!("Skipping session {} - already activated", session_id);
+            // If session is activated AND input is suppressed, skip (remote is in control)
+            // But if activated without input suppression, Input-Leap never responded, so allow re-activation
+            if session.activated && self.niri.input_capture.input_suppressed {
+                warn!("Skipping session {} - already activated and input suppressed", session_id);
                 continue;
             }
             
